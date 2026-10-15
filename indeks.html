@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pendeteksi Objek Computer Vision Real-Time</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- TensorFlow.js Core -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+  <!-- COCO-SSD Object Detection Model -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  
+  <style>
+    /* Styling khusus untuk overlay canvas di atas video */
+    .video-container {
+      position: relative;
+      width: 100%;
+      max-width: 720px;
+      aspect-ratio: 4 / 3;
+      border-radius: 1rem;
+      overflow: hidden;
+      background-color: #0f172a;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    /* Animasi pulsa untuk indikator notifikasi aktif */
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.05); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .pulse-active {
+      animation: pulse-ring 1.5s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans flex flex-col justify-between">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="p-2.5 bg-indigo-600 rounded-xl text-white shadow-lg shadow-indigo-500/30">
+          <i class="fa-solid fa-eye text-xl"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-lg leading-tight text-white">Object Vision AI</h1>
+          <p class="text-xs text-slate-400">Computer Vision & Real-time Notification</p>
+        </div>
+      </div>
+      <div id="modelStatusBadge" class="flex items-center space-x-2 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-full text-xs font-medium">
+        <i class="fa-solid fa-circle-notch fa-spin"></i>
+        <span id="modelStatusText">Memuat Model AI...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-6xl mx-auto px-4 py-6 w-full flex-grow flex flex-col lg:flex-row gap-6 items-start">
+    
+    <!-- Left Column: Video Stream & Canvas -->
+    <div class="w-full lg:w-2/3 flex flex-col items-center">
+      <div class="video-container shadow-2xl border border-slate-800 relative group">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="outputCanvas"></canvas>
+        
+        <!-- Overlay Placeholder saat webcam mati/belum diizinkan -->
+        <div id="videoPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/90 text-center p-6 z-10 transition-opacity duration-300">
+          <div class="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center mb-4 text-slate-400">
+            <i class="fa-solid fa-camera text-2xl"></i>
+          </div>
+          <h3 class="text-lg font-semibold mb-2">Kamera Belum Aktif</h3>
+          <p class="text-sm text-slate-400 max-w-sm mb-6">Klik tombol di bawah ini untuk mengizinkan akses webcam dan memulai deteksi objek secara langsung.</p>
+          <button id="startBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-6 py-2.5 rounded-xl transition flex items-center space-x-2 shadow-lg shadow-indigo-600/30">
+            <i class="fa-solid fa-play"></i>
+            <span>Mulai Kamera</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Control Bar -->
+      <div class="w-full max-w-[720px] mt-4 p-4 bg-slate-800/60 rounded-xl border border-slate-700/50 flex flex-wrap gap-4 items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <button id="toggleCamBtn" disabled class="bg-slate-700 opacity-50 cursor-not-allowed hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center space-x-2">
+            <i class="fa-solid fa-power-off"></i>
+            <span id="toggleCamText">Stop Kamera</span>
+          </button>
+          
+          <button id="audioToggleBtn" class="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center space-x-2">
+            <i id="audioIcon" class="fa-solid fa-volume-high text-emerald-400"></i>
+            <span id="audioText">Suara Notif On</span>
+          </button>
+        </div>
+
+        <div class="flex items-center space-x-2 text-xs text-slate-400">
+          <span>Tingkat Kepercayaan Min:</span>
+          <select id="confidenceSelect" class="bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500">
+            <option value="0.4">40%</option>
+            <option value="0.5" selected>50%</option>
+            <option value="0.6">60%</option>
+            <option value="0.7">70%</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Status & Notification Logs -->
+    <div class="w-full lg:w-1/3 flex flex-col gap-4">
+      
+      <!-- Live Detection Notification Banner -->
+      <div id="notificationBanner" class="p-4 bg-slate-800/80 border border-slate-700/80 rounded-2xl transition-all duration-300">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold tracking-wider uppercase text-slate-400">Status Notifikasi</span>
+          <span id="statusPulse" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+        </div>
+        <div class="flex items-start space-x-3 mt-1">
+          <div id="notifIconBg" class="p-3 bg-slate-700 rounded-xl text-slate-400 transition-colors">
+            <i id="notifIcon" class="fa-solid fa-radar text-xl"></i>
+          </div>
+          <div>
+            <h4 id="notifTitle" class="font-bold text-slate-200 text-base">Menunggu Kamera...</h4>
+            <p id="notifDesc" class="text-xs text-slate-400 mt-0.5">Nyalakan kamera untuk memulai analisis objek real-time.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Detected Objects Summary Card -->
+      <div class="p-4 bg-slate-800/40 border border-slate-800 rounded-2xl">
+        <h3 class="text-sm font-semibold text-slate-300 mb-3 flex items-center justify-between">
+          <span>Objek Terdeteksi Saat Ini</span>
+          <span id="detectedCountBadge" class="bg-indigo-500/20 text-indigo-300 text-xs px-2 py-0.5 rounded-full font-mono">0</span>
+        </h3>
+        <div id="detectedTags" class="flex flex-wrap gap-2 min-h-[48px] items-center">
+          <span class="text-xs text-slate-500 italic">Belum ada objek terdeteksi</span>
+        </div>
+      </div>
+
+      <!-- Real-Time Log List -->
+      <div class="p-4 bg-slate-800/40 border border-slate-800 rounded-2xl flex-grow flex flex-col">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-slate-300">Riwayat Notifikasi</h3>
+          <button id="clearLogsBtn" class="text-xs text-slate-500 hover:text-slate-300 transition">Clear Log</button>
+        </div>
+        <div id="logsContainer" class="space-y-2 max-h-[220px] overflow-y-auto pr-1 text-xs text-slate-400 font-mono">
+          <div class="text-slate-600 text-center py-4 italic">Riwayat kejadian akan muncul di sini...</div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/80 py-4 bg-slate-950/40 text-center text-xs text-slate-500">
+    Aplikasi Pendeteksi Objek Real-Time Menggunakan Web Vision Technology & TensorFlow.js
+  </footer>
+
+  <script>
+    // State management & Global Variables
+    let model = null;
+    let videoStream = null;
+    let isDetecting = false;
+    let soundEnabled = true;
+    let minConfidence = 0.5;
+    let lastNotificationTime = 0;
+    const NOTIFY_COOLDOWN = 3000; // Cooldown dipanjangkan ke 3 detik agar ucapan suara selesai & tidak bertabrakan
+
+    // DOM Elements
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    const videoPlaceholder = document.getElementById('videoPlaceholder');
+    const startBtn = document.getElementById('startBtn');
+    const toggleCamBtn = document.getElementById('toggleCamBtn');
+    const toggleCamText = document.getElementById('toggleCamText');
+    const audioToggleBtn = document.getElementById('audioToggleBtn');
+    const audioIcon = document.getElementById('audioIcon');
+    const audioText = document.getElementById('audioText');
+    const confidenceSelect = document.getElementById('confidenceSelect');
+    const modelStatusBadge = document.getElementById('modelStatusBadge');
+    const modelStatusText = document.getElementById('modelStatusText');
+    
+    // Notification UI Elements
+    const notificationBanner = document.getElementById('notificationBanner');
+    const statusPulse = document.getElementById('statusPulse');
+    const notifIconBg = document.getElementById('notifIconBg');
+    const notifIcon = document.getElementById('notifIcon');
+    const notifTitle = document.getElementById('notifTitle');
+    const notifDesc = document.getElementById('notifDesc');
+    const detectedTags = document.getElementById('detectedTags');
+    const detectedCountBadge = document.getElementById('detectedCountBadge');
+    const logsContainer = document.getElementById('logsContainer');
+    const clearLogsBtn = document.getElementById('clearLogsBtn');
+
+    // Kamus Terjemahan Objek COCO-SSD yang Diperluas (50+ Objek Populer)
+    const objectTranslations = {
+      // Orang & Elektronik
+      'person': 'orang',
+      'cell phone': 'HP',
+      'laptop': 'laptop',
+      'mouse': 'tetikus',
+      'keyboard': 'papan ketik',
+      'tv': 'televisi',
+      'remote': 'remot',
+      'clock': 'jam',
+      'scissors': 'gunting',
+
+      // Perabot & Rumah Tangga
+      'chair': 'kursi',
+      'couch': 'sofa',
+      'potted plant': 'tanaman hias',
+      'bed': 'tempat tidur',
+      'dining table': 'meja makan',
+      'toilet': 'toilet',
+      'vase': 'vas bunga',
+
+      // Peralatan Makan & Dapur
+      'bottle': 'botol',
+      'cup': 'cangkir',
+      'fork': 'garpu',
+      'knife': 'pisau',
+      'spoon': 'sendok',
+      'bowl': 'mangkuk',
+      'wine glass': 'gelas',
+
+      // Makanan & Buah
+      'banana': 'pisang',
+      'apple': 'apel',
+      'sandwich': 'roti lapis',
+      'orange': 'jeruk',
+      'broccoli': 'brokoli',
+      'carrot': 'wortel',
+      'hot dog': 'sosis bakar',
+      'pizza': 'piza',
+      'donut': 'donat',
+      'cake': 'kue',
+
+      // Aksesori & Barang Pribadi
+      'backpack': 'tas ransel',
+      'umbrella': 'payung',
+      'handbag': 'tas tangan',
+      'tie': 'dasi',
+      'suitcase': 'koper',
+      'book': 'buku',
+      'teddy bear': 'boneka beruang',
+      'toothbrush': 'sikat gigi',
+
+      // Kendaraan & Moda Transportasi
+      'bicycle': 'sepeda',
+      'car': 'mobil',
+      'motorcycle': 'motor',
+      'airplane': 'pesawat',
+      'bus': 'bis',
+      'train': 'kereta',
+      'truck': 'truk',
+
+      // Hewan
+      'cat': 'kucing',
+      'dog': 'anjing',
+      'bird': 'burung',
+      'horse': 'kuda',
+      'sheep': 'domba',
+      'cow': 'sapi',
+
+      // Olahraga
+      'sports ball': 'bola',
+      'baseball bat': 'pemukul bisbol',
+      'skateboard': 'papan seluncur'
+    };
+
+    // Mengucapkan SEMUA objek yang terdeteksi dalam satu kalimat dengan suara jelas & volume maksimal
+    function speakDetection(detectedList) {
+      if (!soundEnabled || !('speechSynthesis' in window) || detectedList.length === 0) return;
+      
+      // Hentikan ucapan yang sedang berlangsung
+      window.speechSynthesis.cancel();
+
+      // Terjemahkan SEMUA nama objek yang terdeteksi
+      const translatedNames = detectedList.map(name => objectTranslations[name.toLowerCase()] || name);
+      
+      // Susun nama-nama objek menjadi frasa yang rapi (contoh: "orang, HP, cangkir, dan laptop")
+      let formattedObjects = "";
+      if (translatedNames.length === 1) {
+        formattedObjects = translatedNames[0];
+      } else if (translatedNames.length === 2) {
+        formattedObjects = `${translatedNames[0]} dan ${translatedNames[1]}`;
+      } else {
+        const allButLast = translatedNames.slice(0, -1).join(', ');
+        const lastItem = translatedNames[translatedNames.length - 1];
+        formattedObjects = `${allButLast}, dan ${lastItem}`;
+      }
+
+      const textToSpeak = `Terdeteksi ${formattedObjects}`;
+
+      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      
+      // PENGATURAN SUARA MAKSIMAL & JELAS
+      utterance.volume = 1.0; // Volume 100%
+      utterance.rate = 0.9;   // Artikulasikan dengan agak perlahan agar setiap kata terdengar sangat jelas
+      utterance.pitch = 1.0;  // Pitch normal
+
+      // Gunakan suara Bahasa Indonesia
+      const voices = window.speechSynthesis.getVoices();
+      const idVoice = voices.find(v => v.lang.includes('id') || v.lang.includes('ID'));
+      if (idVoice) {
+        utterance.voice = idVoice;
+      } else {
+        utterance.lang = 'id-ID';
+      }
+
+      window.speechSynthesis.speak(utterance);
+    }
+
+    // Load Model TensorFlow COCO-SSD saat halaman dibuka
+    async function loadModel() {
+      try {
+        model = await cocoSsd.load();
+        modelStatusBadge.className = "flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-full text-xs font-medium";
+        modelStatusText.textContent = "Model AI Siap";
+        modelStatusBadge.querySelector('i').className = "fa-solid fa-check";
+        
+        // Aktifkan button kamera
+        toggleCamBtn.disabled = false;
+        toggleCamBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      } catch (error) {
+        console.error("Gagal memuat model COCO-SSD:", error);
+        modelStatusBadge.className = "flex items-center space-x-2 bg-rose-500/10 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-full text-xs font-medium";
+        modelStatusText.textContent = "Gagal Memuat Model";
+        modelStatusBadge.querySelector('i').className = "fa-solid fa-triangle-exclamation";
+      }
+    }
+
+    // Fungsi untuk memulai Webcam
+    async function startCamera() {
+      if (!model) {
+        alert("Model AI belum selesai dimuat. Silakan tunggu sebentar.");
+        return;
+      }
+
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+          audio: false
+        });
+        
+        video.srcObject = videoStream;
+        
+        video.onloadedmetadata = () => {
+          video.play();
+          // Adjust canvas size sesuai video
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          
+          videoPlaceholder.classList.add('opacity-0', 'pointer-events-none');
+          isDetecting = true;
+          toggleCamText.textContent = "Stop Kamera";
+          
+          updateNotificationState(false, []);
+          addLogEntry("Kamera diaktifkan. Deteksi dimulai.");
+          detectObjectsLoop();
+        };
+      } catch (err) {
+        console.error("Akses webcam ditolak atau gagal:", err);
+        alert("Gagal mengakses kamera webcam. Pastikan izin kamera telah diberikan.");
+      }
+    }
+
+    // Fungsi untuk menghentikan webcam
+    function stopCamera() {
+      isDetecting = false;
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        videoStream = null;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      videoPlaceholder.classList.remove('opacity-0', 'pointer-events-none');
+      toggleCamText.textContent = "Mulai Kamera";
+      updateNotificationState(false, []);
+      addLogEntry("Kamera dihentikan.");
+    }
+
+    // Loop utama deteksi objek
+    async function detectObjectsLoop() {
+      if (!isDetecting) return;
+
+      if (video.readyState === 4) {
+        // Melakukan prediksi menggunakan model COCO-SSD
+        const predictions = await model.detect(video);
+        
+        // Filter hasil prediksi berdasarkan threshold confidence
+        const filteredPredictions = predictions.filter(pred => pred.score >= minConfidence);
+        
+        // Clear canvas sebelumnya
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Render Bounding Boxes & Labels
+        drawPredictions(filteredPredictions);
+
+        // Update Notifikasi & Audio
+        handleDetectionsNotification(filteredPredictions);
+      }
+
+      // Lanjutkan loop deteksi
+      requestAnimationFrame(detectObjectsLoop);
+    }
+
+    // Menggambar kotak pembatas dan label pada canvas
+    function drawPredictions(predictions) {
+      predictions.forEach(prediction => {
+        const [x, y, width, height] = prediction.bbox;
+        const label = prediction.class;
+        const confidence = Math.round(prediction.score * 100);
+
+        // Warna kotak berbeda berdasarkan kelas objek
+        const color = getLabelColor(label);
+
+        // Gambar Kotak (Bounding Box)
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, width, height);
+
+        // Gambar Label Text Background
+        ctx.fillStyle = color;
+        ctx.font = '14px sans-serif';
+        const text = `${label} (${confidence}%)`;
+        const textWidth = ctx.measureText(text).width;
+        
+        ctx.fillRect(x, y > 24 ? y - 24 : y, textWidth + 12, 24);
+
+        // Gambar Text Label
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(text, x + 6, y > 24 ? y - 7 : y + 17);
+      });
+    }
+
+    // Helper warna acak tapi konsisten per label
+    function getLabelColor(label) {
+      let hash = 0;
+      for (let i = 0; i < label.length; i++) {
+        hash = label.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+      return "#" + "00000".substring(0, 6 - c.length) + c;
+    }
+
+    // Penanganan Sistem Notifikasi Visual dan Audio
+    function handleDetectionsNotification(predictions) {
+      const now = Date.now();
+      const detectedClasses = [...new Set(predictions.map(p => p.class))];
+
+      if (predictions.length > 0) {
+        updateNotificationState(true, detectedClasses);
+
+        // Trigger notifikasi suara ucapan dengan cooldown
+        if (now - lastNotificationTime > NOTIFY_COOLDOWN) {
+          speakDetection(detectedClasses);
+          lastNotificationTime = now;
+          addLogEntry(`Terdeteksi: ${detectedClasses.join(', ')}`);
+        }
+      } else {
+        updateNotificationState(false, []);
+      }
+    }
+
+    // Update UI Tampilan Notifikasi Status
+    function updateNotificationState(hasDetection, detectedList) {
+      detectedCountBadge.textContent = detectedList.length;
+
+      if (hasDetection) {
+        notificationBanner.className = "p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-2xl transition-all duration-300 pulse-active";
+        statusPulse.className = "w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping";
+        notifIconBg.className = "p-3 bg-emerald-500/20 text-emerald-400 rounded-xl transition-colors";
+        notifIcon.className = "fa-solid fa-bell text-xl animate-bounce";
+        notifTitle.textContent = "OBJEK TERDETEKSI!";
+        notifTitle.className = "font-bold text-emerald-300 text-base";
+        notifDesc.textContent = `Sistem mendeteksi ${detectedList.length} jenis objek pada kamera.`;
+
+        // Render Chip Tags Objek
+        detectedTags.innerHTML = detectedList.map(item => `
+          <span class="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-lg text-xs font-medium capitalize flex items-center space-x-1">
+            <i class="fa-solid fa-cube text-[10px]"></i>
+            <span>${item}</span>
+          </span>
+        `).join('');
+
+      } else {
+        notificationBanner.className = "p-4 bg-slate-800/80 border border-slate-700/80 rounded-2xl transition-all duration-300";
+        statusPulse.className = "w-2.5 h-2.5 rounded-full bg-slate-500";
+        notifIconBg.className = "p-3 bg-slate-700 rounded-xl text-slate-400 transition-colors";
+        notifIcon.className = "fa-solid fa-radar text-xl";
+        
+        if (isDetecting) {
+          notifTitle.textContent = "Mencari Objek...";
+          notifDesc.textContent = "Arahkan objek ke depan kamera.";
+        } else {
+          notifTitle.textContent = "Kamera Nonaktif";
+          notifDesc.textContent = "Nyalakan kamera untuk memulai deteksi.";
+        }
+        
+        notifTitle.className = "font-bold text-slate-200 text-base";
+        detectedTags.innerHTML = `<span class="text-xs text-slate-500 italic">Belum ada objek terdeteksi</span>`;
+      }
+    }
+
+    // Menambahkan catatan riwayat ke tabel log
+    function addLogEntry(message) {
+      const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      
+      // Hapus teks placeholder jika ada
+      if (logsContainer.children.length === 1 && logsContainer.children[0].classList.contains('italic')) {
+        logsContainer.innerHTML = '';
+      }
+
+      const logItem = document.createElement('div');
+      logItem.className = "flex items-start justify-between py-1 border-b border-slate-800/60 last:border-0";
+      logItem.innerHTML = `
+        <span class="text-slate-300">${message}</span>
+        <span class="text-[10px] text-slate-500 ml-2 font-sans">${timeStr}</span>
+      `;
+
+      logsContainer.insertBefore(logItem, logsContainer.firstChild);
+
+      // Batasi maksimal 20 log entry
+      if (logsContainer.children.length > 20) {
+        logsContainer.removeChild(logsContainer.lastChild);
+      }
+    }
+
+    // Event Listeners UI
+    startBtn.addEventListener('click', startCamera);
+    
+    toggleCamBtn.addEventListener('click', () => {
+      if (isDetecting) {
+        stopCamera();
+      } else {
+        startCamera();
+      }
+    });
+
+    audioToggleBtn.addEventListener('click', () => {
+      soundEnabled = !soundEnabled;
+      if (soundEnabled) {
+        audioIcon.className = "fa-solid fa-volume-high text-emerald-400";
+        audioText.textContent = "Suara Notif On";
+      } else {
+        audioIcon.className = "fa-solid fa-volume-xmark text-rose-400";
+        audioText.textContent = "Suara Muted";
+      }
+    });
+
+    confidenceSelect.addEventListener('change', (e) => {
+      minConfidence = parseFloat(e.target.value);
+    });
+
+    clearLogsBtn.addEventListener('click', () => {
+      logsContainer.innerHTML = `<div class="text-slate-600 text-center py-4 italic">Riwayat cleared...</div>`;
+    });
+
+    // Inisialisasi aplikasi saat halaman selesai dimuat
+    window.addEventListener('DOMContentLoaded', loadModel);
+  </script>
+</body>
+</html>
